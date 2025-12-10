@@ -14,20 +14,20 @@ Always check the `@tambo-ai/react` package exports for the most up-to-date funct
 
 ```bash
 # Development
-npm run dev          # Start development server (localhost:3000)
+npm run dev          # Start Vite development server (localhost:5173)
 npm run build        # Build production bundle
-npm run start        # Start production server
+npm run preview      # Preview production build
 npm run lint         # Run ESLint
 npm run lint:fix     # Run ESLint with auto-fix
-
+```
 
 ## Architecture Overview
 
-This is a Next.js 15 app with Tambo AI integration for building generative UI/UX applications. The architecture enables AI to dynamically generate and control React components.
+This is a Vite + TanStack Router app with Tambo AI integration for building generative UI/UX applications. The architecture enables AI to dynamically generate and control React components.
 
 ### Core Technologies
-- **Next.js 15.4.1** with App Router
-- **React 19.1.0** with TypeScript
+- **Vite** with **TanStack Router** for file-based routing
+- **React 19** with TypeScript
 - **Tambo AI SDK**
 - **Tailwind CSS v4** with dark mode support
 - **Zod** for schema validation
@@ -45,7 +45,7 @@ This is a Next.js 15 app with Tambo AI integration for building generative UI/UX
    - Tools have schemas defining their inputs and outputs
 
 3. **Provider Pattern**
-   - `TamboProvider` wraps the app in `src/app/layout.tsx`
+   - `TamboProvider` wraps the app in `src/routes/__root.tsx`
    - Provides API key, registered components, and tools to the entire app
 
 4. **Streaming Architecture**
@@ -55,25 +55,25 @@ This is a Next.js 15 app with Tambo AI integration for building generative UI/UX
 ### File Structure
 
 ```
-
 src/
-├── app/ # Next.js App Router pages
-│ ├── chat/ # Chat interface route
-│ ├── interactables/ # Interactive components demo
-│ └── layout.tsx # Root layout with TamboProvider
+├── routes/              # TanStack Router pages
+│   ├── __root.tsx       # Root layout with TamboProvider
+│   ├── index.tsx        # Home page
+│   ├── chat.tsx         # Chat interface route
+│   └── interactables.tsx # Interactive components demo
 ├── components/
-│ ├── tambo/ # Tambo-specific components
-│ │ ├── graph.tsx # Recharts data visualization
-│ │ ├── message*.tsx # Chat UI components
-│ │ └── thread*.tsx # Thread management UI
-│ └── ApiKeyCheck.tsx # API key validation
+│   ├── tambo/           # Tambo-specific components
+│   │   ├── graph.tsx    # Recharts data visualization
+│   │   ├── message*.tsx # Chat UI components
+│   │   └── thread*.tsx  # Thread management UI
+│   └── ApiKeyCheck.tsx  # API key validation
 ├── lib/
-│ ├── tambo.ts # CENTRAL CONFIG: Component & tool registration
-│ ├── thread-hooks.ts # Custom thread management hooks
-│ └── utils.ts # Utility functions
-└── services/
-└── population-stats.ts # Demo data service
-
+│   ├── tambo.ts         # CENTRAL CONFIG: Component & tool registration
+│   ├── thread-hooks.ts  # Custom thread management hooks
+│   └── utils.ts         # Utility functions
+├── services/
+│   └── population-stats.ts # Demo data service
+└── main.tsx             # App entry point
 ```
 
 ## Key Tambo Hooks

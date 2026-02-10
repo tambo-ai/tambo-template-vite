@@ -1,4 +1,7 @@
+"use client";
+
 import { cn } from "@/lib/utils";
+import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
   type ThreadListResponse,
   useTambo,
@@ -7,10 +10,15 @@ import {
 import {
   ArrowLeftToLine,
   ArrowRightToLine,
+  MoreHorizontal,
+  Pencil,
   PlusIcon,
   SearchIcon,
 } from "lucide-react";
 import React, { useMemo } from "react";
+
+/** Thread item from the thread list API */
+type ThreadListItem = ThreadListResponse["threads"][number];
 
 /**
  * Context for sharing thread history state and functions
@@ -22,7 +30,7 @@ interface ThreadHistoryContextValue {
   refetch: () => Promise<unknown>;
   currentThreadId: string;
   switchThread: (threadId: string) => void;
-  startNewThread: () => void;
+  startNewThread: () => string;
   searchQuery: string;
   setSearchQuery: React.Dispatch<React.SetStateAction<string>>;
   isCollapsed: boolean;
@@ -44,6 +52,9 @@ const useThreadHistoryContext = () => {
   return context;
 };
 
+/**
+ * Root component that provides context for thread history
+ */
 interface ThreadHistoryProps extends React.HTMLAttributes<HTMLDivElement> {
   onThreadChange?: () => void;
   children?: React.ReactNode;
@@ -67,18 +78,9 @@ const ThreadHistory = React.forwardRef<HTMLDivElement, ThreadHistoryProps>(
     const [isCollapsed, setIsCollapsed] = React.useState(defaultCollapsed);
     const [shouldFocusSearch, setShouldFocusSearch] = React.useState(false);
 
-    const {
-      data: threads,
-      isLoading,
-      error,
-      refetch,
-    } = useTamboThreadList();
+    const { data: threads, isLoading, error, refetch } = useTamboThreadList();
 
-    const {
-      switchThread,
-      startNewThread,
-      currentThreadId,
-    } = useTambo();
+    const { switchThread, startNewThread, currentThreadId } = useTambo();
 
     // Update CSS variable when sidebar collapses/expands
     React.useEffect(() => {
@@ -89,6 +91,7 @@ const ThreadHistory = React.forwardRef<HTMLDivElement, ThreadHistoryProps>(
       );
     }, [isCollapsed]);
 
+    // Focus search input when expanded from collapsed state
     React.useEffect(() => {
       if (!isCollapsed && shouldFocusSearch) {
         setShouldFocusSearch(false);
@@ -127,9 +130,7 @@ const ThreadHistory = React.forwardRef<HTMLDivElement, ThreadHistoryProps>(
     );
 
     return (
-      <ThreadHistoryContext.Provider
-        value={contextValue as ThreadHistoryContextValue}
-      >
+      <ThreadHistoryContext.Provider value={contextValue}>
         <div
           ref={ref}
           className={cn(
@@ -144,7 +145,7 @@ const ThreadHistory = React.forwardRef<HTMLDivElement, ThreadHistoryProps>(
             className={cn(
               "flex flex-col h-full",
               isCollapsed ? "py-4 px-2" : "p-4",
-            )}
+            )} // py-4 px-2 is for better alignment when isCollapsed
           >
             {children}
           </div>
@@ -155,6 +156,9 @@ const ThreadHistory = React.forwardRef<HTMLDivElement, ThreadHistoryProps>(
 );
 ThreadHistory.displayName = "ThreadHistory";
 
+/**
+ * Header component with title and collapse toggle
+ */
 const ThreadHistoryHeader = React.forwardRef<
   HTMLDivElement,
   React.HTMLAttributes<HTMLDivElement>
@@ -208,6 +212,9 @@ const ThreadHistoryHeader = React.forwardRef<
 });
 ThreadHistoryHeader.displayName = "ThreadHistory.Header";
 
+/**
+ * Button to create a new thread
+ */
 const ThreadHistoryNewButton = React.forwardRef<
   HTMLButtonElement,
   React.ButtonHTMLAttributes<HTMLButtonElement>
@@ -234,7 +241,7 @@ const ThreadHistoryNewButton = React.forwardRef<
     const handleKeyDown = (event: KeyboardEvent) => {
       if (event.altKey && event.shiftKey && event.key === "n") {
         event.preventDefault();
-        handleNewThread();
+        void handleNewThread();
       }
     };
 
@@ -269,6 +276,9 @@ const ThreadHistoryNewButton = React.forwardRef<
 });
 ThreadHistoryNewButton.displayName = "ThreadHistory.NewButton";
 
+/**
+ * Search input for filtering threads
+ */
 const ThreadHistorySearch = React.forwardRef<
   HTMLDivElement,
   React.HTMLAttributes<HTMLDivElement>
@@ -282,12 +292,13 @@ const ThreadHistorySearch = React.forwardRef<
       setIsCollapsed(false);
       setTimeout(() => {
         searchInputRef.current?.focus();
-      }, 300);
+      }, 300); // Wait for animation
     }
   };
 
   return (
     <div ref={ref} className={cn("mb-4 relative", className)} {...props}>
+      {/*visible when collapsed */}
       <button
         onClick={expandOnSearch}
         className={cn(
@@ -301,8 +312,11 @@ const ThreadHistorySearch = React.forwardRef<
         <SearchIcon className="h-4 w-4 text-gray-400" />
       </button>
 
+      {/*visible when expanded with delay */}
+
       <div
         className={cn(
+          //using this as wrapper
           isCollapsed
             ? "opacity-0 pointer-events-none"
             : "opacity-100 delay-100 transition-all duration-500",
@@ -325,6 +339,9 @@ const ThreadHistorySearch = React.forwardRef<
 });
 ThreadHistorySearch.displayName = "ThreadHistory.Search";
 
+/**
+ * List of thread items
+ */
 const ThreadHistoryList = React.forwardRef<
   HTMLDivElement,
   React.HTMLAttributes<HTMLDivElement>
@@ -340,18 +357,56 @@ const ThreadHistoryList = React.forwardRef<
     onThreadChange,
   } = useThreadHistoryContext();
 
+  const [editingThread, setEditingThread] =
+    React.useState<ThreadListItem | null>(null);
+  const [newName, setNewName] = React.useState("");
+  const inputRef = React.useRef<HTMLInputElement>(null);
+
+  // Handle click outside name editing input
+  React.useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (
+        editingThread &&
+        inputRef.current &&
+        !inputRef.current.contains(event.target as Node)
+      ) {
+        setEditingThread(null);
+      }
+    };
+
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [editingThread]);
+
+  // Focus input when entering edit mode
+  React.useEffect(() => {
+    if (editingThread) {
+      const timer = setTimeout(() => {
+        inputRef.current?.focus();
+      }, 100);
+      return () => clearTimeout(timer);
+    }
+  }, [editingThread]);
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape") {
+      setEditingThread(null);
+    }
+  };
+
   // Filter threads based on search query
   const filteredThreads = useMemo(() => {
+    // While collapsed we do not need the list, avoid extra work.
     if (isCollapsed) return [];
 
     if (!threads?.threads) return [];
 
     const query = searchQuery.toLowerCase();
-    return threads.threads.filter((thread) => {
-      const nameMatches = thread.name?.toLowerCase().includes(query) ?? false;
+    return threads.threads.filter((thread: ThreadListItem) => {
       const idMatches = thread.id.toLowerCase().includes(query);
-
-      return idMatches ? true : nameMatches;
+      return idMatches;
     });
   }, [isCollapsed, threads, searchQuery]);
 
@@ -366,6 +421,20 @@ const ThreadHistoryList = React.forwardRef<
     }
   };
 
+  const handleRename = (thread: ThreadListItem) => {
+    setEditingThread(thread);
+    setNewName(`Thread ${thread.id.substring(0, 8)}`);
+  };
+
+  const handleNameSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingThread) return;
+
+    // Thread renaming is not supported in V1 API
+    setEditingThread(null);
+  };
+
+  // Content to show
   let content;
   if (isLoading) {
     content = (
@@ -406,28 +475,58 @@ const ThreadHistoryList = React.forwardRef<
   } else {
     content = (
       <div className="space-y-1">
-        {filteredThreads.map((thread) => (
+        {filteredThreads.map((thread: ThreadListItem) => (
           <div
             key={thread.id}
             onClick={async () => await handleSwitchThread(thread.id)}
             className={cn(
               "p-2 rounded-md hover:bg-backdrop cursor-pointer group flex items-center justify-between",
               currentThreadId === thread.id ? "bg-muted" : "",
+              editingThread?.id === thread.id ? "bg-muted" : "",
             )}
           >
             <div className="text-sm flex-1">
-              <span className="font-medium line-clamp-1">
-                {thread.name ?? `Thread ${thread.id.substring(0, 8)}`}
-              </span>
-              <p className="text-xs text-muted-foreground truncate mt-1">
-                {new Date(thread.createdAt).toLocaleString(undefined, {
-                  month: "short",
-                  day: "numeric",
-                  hour: "numeric",
-                  minute: "2-digit",
-                })}
-              </p>
+              {editingThread?.id === thread.id ? (
+                <form
+                  onSubmit={handleNameSubmit}
+                  className="flex flex-col gap-1"
+                >
+                  <input
+                    ref={inputRef}
+                    type="text"
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    className="w-full bg-background px-1 text-sm font-medium focus:outline-none rounded-sm"
+                    onClick={(e) => e.stopPropagation()}
+                    placeholder="Thread name..."
+                  />
+                  <p className="text-xs text-muted-foreground truncate">
+                    {new Date(thread.createdAt).toLocaleString(undefined, {
+                      month: "short",
+                      day: "numeric",
+                      hour: "numeric",
+                      minute: "2-digit",
+                    })}
+                  </p>
+                </form>
+              ) : (
+                <>
+                  <span className="font-medium line-clamp-1">
+                    {`Thread ${thread.id.substring(0, 8)}`}
+                  </span>
+                  <p className="text-xs text-muted-foreground truncate mt-1">
+                    {new Date(thread.createdAt).toLocaleString(undefined, {
+                      month: "short",
+                      day: "numeric",
+                      hour: "numeric",
+                      minute: "2-digit",
+                    })}
+                  </p>
+                </>
+              )}
             </div>
+            <ThreadOptionsDropdown thread={thread} onRename={handleRename} />
           </div>
         ))}
       </div>
@@ -452,10 +551,53 @@ const ThreadHistoryList = React.forwardRef<
 });
 ThreadHistoryList.displayName = "ThreadHistory.List";
 
+/**
+ * Dropdown menu component for thread actions
+ */
+const ThreadOptionsDropdown = ({
+  thread,
+  onRename,
+}: {
+  thread: ThreadListItem;
+  onRename: (thread: ThreadListItem) => void;
+}) => {
+  return (
+    <DropdownMenu.Root>
+      <DropdownMenu.Trigger asChild>
+        <button
+          className="p-1 hover:bg-backdrop rounded-md opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <MoreHorizontal className="h-4 w-4 text-muted-foreground" />
+        </button>
+      </DropdownMenu.Trigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content
+          className="min-w-[160px] text-xs bg-popover rounded-md p-1 shadow-md border border-border"
+          sideOffset={5}
+          align="end"
+        >
+          <DropdownMenu.Item
+            className="flex items-center gap-2 px-2 py-1.5 text-foreground hover:bg-backdrop rounded-sm cursor-pointer outline-none transition-colors"
+            onClick={(e) => {
+              e.stopPropagation();
+              onRename(thread);
+            }}
+          >
+            <Pencil className="h-3 w-3" />
+            Rename
+          </DropdownMenu.Item>
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  );
+};
+
 export {
   ThreadHistory,
   ThreadHistoryHeader,
   ThreadHistoryList,
   ThreadHistoryNewButton,
   ThreadHistorySearch,
+  ThreadOptionsDropdown,
 };

@@ -1,9 +1,13 @@
+"use client";
+
 import type { messageVariants } from "@/components/tambo/message";
 import {
   MessageInput,
   MessageInputError,
   MessageInputFileButton,
+  MessageInputMcpConfigButton,
   MessageInputMcpPromptButton,
+  MessageInputMcpResourceButton,
   MessageInputSubmitButton,
   MessageInputTextarea,
   MessageInputToolbar,
@@ -14,10 +18,7 @@ import {
   MessageSuggestionsStatus,
 } from "@/components/tambo/message-suggestions";
 import { ScrollableMessageContainer } from "@/components/tambo/scrollable-message-container";
-import {
-  ThreadContainer,
-  useThreadContainerContext,
-} from "@/components/tambo/thread-container";
+import { ThreadContainer, useThreadContainerContext } from "./thread-container";
 import {
   ThreadContent,
   ThreadContentMessages,
@@ -37,8 +38,7 @@ import * as React from "react";
 /**
  * Props for the MessageThreadFull component
  */
-export interface MessageThreadFullProps
-  extends React.HTMLAttributes<HTMLDivElement> {
+export interface MessageThreadFullProps extends React.HTMLAttributes<HTMLDivElement> {
   /**
    * Controls the visual styling of messages in the thread.
    * Possible values include: "default", "compact", etc.
@@ -117,8 +117,9 @@ export const MessageThreadFull = React.forwardRef<
             <MessageInputToolbar>
               <MessageInputFileButton />
               <MessageInputMcpPromptButton />
+              <MessageInputMcpResourceButton />
               {/* Uncomment this to enable client-side MCP config modal button */}
-              {/* <MessageInputMcpConfigButton /> */}
+              <MessageInputMcpConfigButton />
               <MessageInputSubmitButton />
             </MessageInputToolbar>
             <MessageInputError />

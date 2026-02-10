@@ -1,6 +1,7 @@
+"use client";
+
 import { cn } from "@/lib/utils";
 import { useTambo } from "@tambo-ai/react";
-import type { StreamingState } from "@tambo-ai/react";
 import { Loader2Icon } from "lucide-react";
 import * as React from "react";
 
@@ -10,8 +11,7 @@ import * as React from "react";
  * @property {boolean} showLabel - Whether to show the label
  */
 
-export interface GenerationStageProps
-  extends React.HTMLAttributes<HTMLDivElement> {
+export interface GenerationStageProps extends React.HTMLAttributes<HTMLDivElement> {
   showLabel?: boolean;
 }
 
@@ -20,19 +20,20 @@ export function MessageGenerationStage({
   showLabel = true,
   ...props
 }: GenerationStageProps) {
-  const { streamingState, isIdle } = useTambo();
-  const status = streamingState.status;
-
-  // Map status to user-friendly labels
-  const stageLabels: Record<StreamingState["status"], string> = {
-    idle: "Idle",
-    waiting: "Waiting for response",
-    streaming: "Generating response",
-  };
-
-  const label = stageLabels[status] ?? status;
+  const { isStreaming, isWaiting, isIdle } = useTambo();
 
   if (isIdle) {
+    return null;
+  }
+
+  let label = "";
+  if (isWaiting) {
+    label = "Preparing response";
+  } else if (isStreaming) {
+    label = "Generating response";
+  }
+
+  if (!label) {
     return null;
   }
 

@@ -1,27 +1,50 @@
-import { MessageGenerationStage } from "@/components/tambo/message-generation-stage";
-import {
-  Tooltip,
-  TooltipProvider,
-} from "@/components/tambo/suggestions-tooltip";
+"use client";
+
+import { MessageGenerationStage } from "./message-generation-stage";
+import { Tooltip, TooltipProvider } from "./suggestions-tooltip";
 import { cn } from "@/lib/utils";
-import type { Suggestion } from "@tambo-ai/react";
-import { useTambo, useTamboSuggestions } from "@tambo-ai/react";
-import { Loader2Icon } from "lucide-react";
+import type { Suggestion, TamboThreadMessage } from "@tambo-ai/react";
+import {
+  useTambo,
+  useTamboSuggestions,
+  useTamboThreadInput,
+} from "@tambo-ai/react";
 import * as React from "react";
 import { useEffect, useRef } from "react";
 
+/**
+ * @typedef MessageSuggestionsContextValue
+ * @property {Array} suggestions - Array of suggestion objects
+ * @property {string|null} selectedSuggestionId - ID of the currently selected suggestion
+ * @property {function} accept - Function to accept a suggestion
+ * @property {boolean} isGenerating - Whether suggestions are being generated
+ * @property {Error|null} error - Any error from generation
+ * @property {object} thread - The current Tambo thread
+ */
 interface MessageSuggestionsContextValue {
   suggestions: Suggestion[];
   selectedSuggestionId: string | null;
-  accept: (options: { suggestion: Suggestion }) => void;
+  accept: (options: { suggestion: Suggestion }) => Promise<void>;
   isGenerating: boolean;
   error: Error | null;
+  messages: TamboThreadMessage[];
+  isStreaming: boolean;
   isMac: boolean;
 }
 
+/**
+ * React Context for sharing suggestion data and functions among sub-components.
+ * @internal
+ */
 const MessageSuggestionsContext =
   React.createContext<MessageSuggestionsContextValue | null>(null);
 
+/**
+ * Hook to access the message suggestions context.
+ * @returns {MessageSuggestionsContextValue} The message suggestions context value.
+ * @throws {Error} If used outside of MessageSuggestions.
+ * @internal
+ */
 const useMessageSuggestionsContext = () => {
   const context = React.useContext(MessageSuggestionsContext);
   if (!context) {
@@ -32,13 +55,31 @@ const useMessageSuggestionsContext = () => {
   return context;
 };
 
-export interface MessageSuggestionsProps
-  extends React.HTMLAttributes<HTMLDivElement> {
+/**
+ * Props for the MessageSuggestions component.
+ * Extends standard HTMLDivElement attributes.
+ */
+export interface MessageSuggestionsProps extends React.HTMLAttributes<HTMLDivElement> {
+  /** Maximum number of suggestions to display (default: 3) */
   maxSuggestions?: number;
+  /** The child elements to render within the container. */
   children?: React.ReactNode;
+  /** Pre-seeded suggestions to display initially */
   initialSuggestions?: Suggestion[];
 }
 
+/**
+ * The root container for message suggestions.
+ * It establishes the context for its children and handles overall state management.
+ * @component MessageSuggestions
+ * @example
+ * ```tsx
+ * <MessageSuggestions maxSuggestions={3}>
+ *   <MessageSuggestions.Status />
+ *   <MessageSuggestions.List />
+ * </MessageSuggestions>
+ * ```
+ */
 const MessageSuggestions = React.forwardRef<
   HTMLDivElement,
   MessageSuggestionsProps
@@ -53,7 +94,8 @@ const MessageSuggestions = React.forwardRef<
     },
     ref,
   ) => {
-    const { messages } = useTambo();
+    const { messages, isStreaming } = useTambo();
+    const { setValue } = useTamboThreadInput();
     const {
       suggestions: generatedSuggestions,
       selectedSuggestionId,
@@ -64,12 +106,14 @@ const MessageSuggestions = React.forwardRef<
 
     // Combine initial and generated suggestions, but only use initial ones when thread is empty
     const suggestions = React.useMemo(() => {
-      if (!messages?.length && initialSuggestions.length > 0) {
+      // Only use pre-seeded suggestions if thread is empty
+      if (!messages.length && initialSuggestions.length > 0) {
         return initialSuggestions.slice(0, maxSuggestions);
       }
+      // Otherwise use generated suggestions
       return generatedSuggestions;
     }, [
-      messages?.length,
+      messages.length,
       generatedSuggestions,
       initialSuggestions,
       maxSuggestions,
@@ -78,6 +122,7 @@ const MessageSuggestions = React.forwardRef<
     const isMac =
       typeof navigator !== "undefined" && navigator.platform.startsWith("Mac");
 
+    // Track the last AI message ID to detect new messages
     const lastAiMessageIdRef = useRef<string | null>(null);
     const loadingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -88,6 +133,8 @@ const MessageSuggestions = React.forwardRef<
         accept,
         isGenerating,
         error,
+        messages,
+        isStreaming,
         isMac,
       }),
       [
@@ -96,14 +143,20 @@ const MessageSuggestions = React.forwardRef<
         accept,
         isGenerating,
         error,
+        messages,
+        isStreaming,
         isMac,
       ],
     );
 
-    const lastAiMessage = messages
-      ? [...messages].reverse().find((msg) => msg.role === "assistant")
-      : null;
+    // Find the last AI message
+    const lastAiMessage =
+      messages.length > 0
+        ? (messages.reverse().find((msg) => msg.role === "assistant") ??       
+          null)
+        : null;
 
+    // When a new AI message appears, update the reference
     useEffect(() => {
       if (lastAiMessage && lastAiMessage.id !== lastAiMessageIdRef.current) {
         lastAiMessageIdRef.current = lastAiMessage.id;
@@ -135,8 +188,12 @@ const MessageSuggestions = React.forwardRef<
           const keyNum = parseInt(event.key);
           if (!isNaN(keyNum) && keyNum > 0 && keyNum <= suggestions.length) {
             event.preventDefault();
-            const suggestionIndex = keyNum - 1;
-            accept({ suggestion: suggestions[suggestionIndex] as Suggestion });
+            const suggestion = suggestions[keyNum - 1];
+            const content =
+              suggestion.detailedSuggestion ?? suggestion.title;
+            if (content) {
+              setValue(content);
+            }
           }
         }
       };
@@ -146,9 +203,10 @@ const MessageSuggestions = React.forwardRef<
       return () => {
         document.removeEventListener("keydown", handleKeyDown);
       };
-    }, [suggestions, accept, isMac]);
+    }, [suggestions, setValue, isMac]);
 
-    if (!messages?.length && initialSuggestions.length === 0) {
+    // If we have no messages yet and no initial suggestions, render nothing
+    if (!messages.length && initialSuggestions.length === 0) {
       return null;
     }
 
@@ -170,63 +228,101 @@ const MessageSuggestions = React.forwardRef<
 );
 MessageSuggestions.displayName = "MessageSuggestions";
 
+/**
+ * Props for the MessageSuggestionsStatus component.
+ * Extends standard HTMLDivElement attributes.
+ */
 export type MessageSuggestionsStatusProps =
   React.HTMLAttributes<HTMLDivElement>;
 
+/**
+ * Displays loading, error, or generation stage information.
+ * Automatically connects to the context to show the appropriate status.
+ * @component MessageSuggestions.Status
+ * @example
+ * ```tsx
+ * <MessageSuggestions>
+ *   <MessageSuggestions.Status />
+ *   <MessageSuggestions.List />
+ * </MessageSuggestions>
+ * ```
+ */
 const MessageSuggestionsStatus = React.forwardRef<
   HTMLDivElement,
   MessageSuggestionsStatusProps
 >(({ className, ...props }, ref) => {
-  const { error, isGenerating } = useMessageSuggestionsContext();
-  const { isIdle } = useTambo();
+  const { error, isGenerating, isStreaming } = useMessageSuggestionsContext();
 
   return (
     <div
       ref={ref}
       className={cn(
         "p-2 rounded-md text-sm bg-transparent",
-        !error && !isGenerating && isIdle
-          ? "p-0 min-h-0 mb-0"
-          : "",
+        !error && !isGenerating && !isStreaming ? "p-0 min-h-0 mb-0" : "",
         className,
       )}
       data-slot="message-suggestions-status"
       {...props}
     >
+      {/* Error state */}
       {error && (
         <div className="p-2 rounded-md text-sm bg-red-50 text-red-500">
           <p>{error.message}</p>
         </div>
       )}
 
+      {/* Always render a container for generation stage to prevent layout shifts */}
       <div className="generation-stage-container">
-        {!isIdle ? (
-          <MessageGenerationStage />
-        ) : isGenerating ? (
-          <div className="flex items-center gap-2 text-muted-foreground">
-            <Loader2Icon className="h-4 w-4 animate-spin" />
-            <p>Generating suggestions...</p>
-          </div>
-        ) : null}
+        {isStreaming && <MessageGenerationStage />}
       </div>
     </div>
   );
 });
 MessageSuggestionsStatus.displayName = "MessageSuggestions.Status";
 
+/**
+ * Props for the MessageSuggestionsList component.
+ * Extends standard HTMLDivElement attributes.
+ */
 export type MessageSuggestionsListProps = React.HTMLAttributes<HTMLDivElement>;
 
+/**
+ * Displays the list of suggestion buttons.
+ * Automatically connects to the context to show the suggestions.
+ * @component MessageSuggestions.List
+ * @example
+ * ```tsx
+ * <MessageSuggestions>
+ *   <MessageSuggestions.Status />
+ *   <MessageSuggestions.List />
+ * </MessageSuggestions>
+ * ```
+ */
 const MessageSuggestionsList = React.forwardRef<
   HTMLDivElement,
   MessageSuggestionsListProps
 >(({ className, ...props }, ref) => {
-  const { suggestions, selectedSuggestionId, accept, isGenerating, isMac } =
+  const { suggestions, selectedSuggestionId, isGenerating, isMac } =
     useMessageSuggestionsContext();
+  const { setValue } = useTamboThreadInput();
 
-  const modKey = isMac ? "\u2318" : "Ctrl";
-  const altKey = isMac ? "\u2325" : "Alt";
+  const modKey = isMac ? "⌘" : "Ctrl";
+  const altKey = isMac ? "⌥" : "Alt";
 
+  // Create placeholder suggestions when there are no real suggestions
   const placeholders = Array(3).fill(null);
+
+  const handleSuggestionClick = React.useCallback(
+    async (suggestion: Suggestion) => {
+      if (isGenerating) return;
+
+      const content = suggestion.detailedSuggestion ?? suggestion.title;
+      if (content) {
+        setValue(content);
+      }
+    },
+    [isGenerating, setValue],
+  );
 
   return (
     <div
@@ -254,15 +350,12 @@ const MessageSuggestionsList = React.forwardRef<
                 className={cn(
                   "py-2 px-2.5 rounded-2xl text-xs transition-colors",
                   "border border-flat",
-                  isGenerating
-                    ? "bg-muted/50 text-muted-foreground"
-                    : selectedSuggestionId === suggestion.id
-                      ? "bg-accent text-accent-foreground"
-                      : "bg-background hover:bg-accent hover:text-accent-foreground",
+                  getSuggestionButtonClassName({
+                    isGenerating,
+                    isSelected: selectedSuggestionId === suggestion.id,
+                  }),
                 )}
-                onClick={async () =>
-                  !isGenerating && (await accept({ suggestion }))
-                }
+                onClick={() => handleSuggestionClick(suggestion)}
                 disabled={isGenerating}
                 data-suggestion-id={suggestion.id}
                 data-suggestion-index={index}
@@ -271,7 +364,8 @@ const MessageSuggestionsList = React.forwardRef<
               </button>
             </Tooltip>
           ))
-        : placeholders.map((_, index) => (
+        : // Render placeholder buttons when no suggestions are available
+          placeholders.map((_, index) => (
             <div
               key={`placeholder-${index}`}
               className="py-2 px-2.5 rounded-2xl text-xs border border-flat bg-muted/20 text-transparent animate-pulse"
@@ -285,4 +379,29 @@ const MessageSuggestionsList = React.forwardRef<
 });
 MessageSuggestionsList.displayName = "MessageSuggestions.List";
 
-export { MessageSuggestions, MessageSuggestionsStatus, MessageSuggestionsList };
+/**
+ * Internal function to get className for suggestion button based on state
+ */
+function getSuggestionButtonClassName({
+  isGenerating,
+  isSelected,
+}: {
+  isGenerating: boolean;
+  isSelected: boolean;
+}) {
+  if (isGenerating) {
+    return "bg-muted/50 text-muted-foreground";
+  }
+  if (isSelected) {
+    return "bg-accent text-accent-foreground";
+  }
+  return "bg-background hover:bg-accent hover:text-accent-foreground";
+}
+
+export {
+  MessageSuggestions,
+  MessageSuggestionsList,
+  MessageSuggestionsStatus,
+  Tooltip,
+  TooltipProvider,
+};

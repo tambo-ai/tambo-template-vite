@@ -1,7 +1,9 @@
+"use client";
+
 import {
   Tooltip,
   TooltipProvider,
-} from "@/components/tambo/suggestions-tooltip";
+} from "@/components/tambo/message-suggestions";
 import { cn } from "@/lib/utils";
 import * as DropdownMenu from "@radix-ui/react-dropdown-menu";
 import {
@@ -9,14 +11,70 @@ import {
   useTamboMcpPromptList,
   useTamboMcpResourceList,
 } from "@tambo-ai/react/mcp";
-import { AtSign, FileText, Search } from "lucide-react";
+import { AlertCircle, AtSign, FileText, Search } from "lucide-react";
 import * as React from "react";
+
+/**
+ * Represents a single message content item from an MCP prompt.
+ */
+interface PromptMessageContent {
+  type?: string;
+  text?: string;
+}
+
+/**
+ * Represents a single message from an MCP prompt.
+ */
+interface PromptMessage {
+  content?: PromptMessageContent;
+}
+
+/**
+ * Validates that prompt data has a valid messages array structure.
+ * @param promptData - The prompt data to validate
+ * @returns true if the prompt data has valid messages, false otherwise
+ */
+function isValidPromptData(
+  promptData: unknown,
+): promptData is { messages: PromptMessage[] } {
+  if (!promptData || typeof promptData !== "object") {
+    return false;
+  }
+
+  const data = promptData as { messages?: unknown };
+  if (!Array.isArray(data.messages)) {
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * Safely extracts text content from prompt messages.
+ * Handles malformed or missing content gracefully.
+ * @param messages - Array of prompt messages
+ * @returns Extracted text content joined by newlines
+ */
+function extractPromptText(messages: PromptMessage[]): string {
+  return messages
+    .map((msg) => {
+      // Safely access nested properties
+      if (
+        msg?.content?.type === "text" &&
+        typeof msg.content.text === "string"
+      ) {
+        return msg.content.text;
+      }
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
 
 /**
  * Props for the McpPromptButton component.
  */
-export interface McpPromptButtonProps
-  extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+export interface McpPromptButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   /** Callback to insert text into the input */
   onInsertText: (text: string) => void;
   /** Current input value */
@@ -44,21 +102,32 @@ export const McpPromptButton = React.forwardRef<
   const [selectedPromptName, setSelectedPromptName] = React.useState<
     string | null
   >(null);
-  const { data: promptData } = useTamboMcpPrompt(selectedPromptName ?? "");
+  const [promptError, setPromptError] = React.useState<string | null>(null);
+  const { data: promptData, error: fetchError } = useTamboMcpPrompt(
+    selectedPromptName ?? "",
+  );
 
-  // When prompt data is fetched, insert it into the input
+  // When prompt data is fetched, validate and insert it into the input
   React.useEffect(() => {
-    if (promptData && selectedPromptName) {
-      // Extract the text from the prompt messages
-      const promptText = promptData.messages
-        .map((msg) => {
-          if (msg.content.type === "text") {
-            return msg.content.text;
-          }
-          return "";
-        })
-        .filter(Boolean)
-        .join("\n");
+    if (selectedPromptName && promptData) {
+      // Validate prompt data structure
+      if (!isValidPromptData(promptData)) {
+        setPromptError("Invalid prompt format received");
+        setSelectedPromptName(null);
+        return;
+      }
+
+      // Extract text with safe access
+      const promptText = extractPromptText(promptData.messages);
+
+      if (!promptText) {
+        setPromptError("Prompt contains no text content");
+        setSelectedPromptName(null);
+        return;
+      }
+
+      // Clear any previous errors
+      setPromptError(null);
 
       // Insert the prompt text, appending to existing value if any
       const newValue = value ? `${value}\n\n${promptText}` : promptText;
@@ -68,6 +137,22 @@ export const McpPromptButton = React.forwardRef<
       setSelectedPromptName(null);
     }
   }, [promptData, selectedPromptName, onInsertText, value]);
+
+  // Handle fetch errors
+  React.useEffect(() => {
+    if (fetchError) {
+      setPromptError("Failed to load prompt");
+      setSelectedPromptName(null);
+    }
+  }, [fetchError]);
+
+  // Clear error after a delay
+  React.useEffect(() => {
+    if (promptError) {
+      const timer = setTimeout(() => setPromptError(null), 3000);
+      return () => clearTimeout(timer);
+    }
+  }, [promptError]);
 
   // Only show button if prompts are available (hide during loading and when no prompts)
   if (!promptList || promptList.length === 0) {
@@ -82,64 +167,45 @@ export const McpPromptButton = React.forwardRef<
   return (
     <TooltipProvider>
       <Tooltip
-        content="Insert MCP Prompt"
+        content={promptError ?? "Insert MCP Prompt"}
         side="top"
-        className="bg-muted text-foreground"
+        className={cn(
+          "bg-muted text-foreground",
+          promptError && "bg-destructive text-destructive-foreground",
+        )}
       >
         <DropdownMenu.Root>
           <DropdownMenu.Trigger asChild>
             <button
               ref={ref}
               type="button"
-              className={buttonClasses}
+              className={cn(
+                buttonClasses,
+                promptError && "border-destructive text-destructive",
+              )}
               aria-label="Insert MCP Prompt"
               data-slot="mcp-prompt-button"
               {...props}
             >
-              <FileText className="w-4 h-4" />
+              {promptError ? (
+                <AlertCircle className="w-4 h-4" />
+              ) : (
+                <FileText className="w-4 h-4" />
+              )}
             </button>
           </DropdownMenu.Trigger>
           <DropdownMenu.Portal>
             <DropdownMenu.Content
-              className="z-50 min-w-[200px] max-w-[300px] overflow-hidden rounded-md border border-gray-200 bg-popover p-1 text-popover-foreground shadow-md"
+              className="z-50 min-w-[200px] max-w-[300px] overflow-hidden rounded-md border border-border bg-popover p-1 text-popover-foreground shadow-md"
               side="top"
               align="start"
               sideOffset={5}
             >
-              {isLoading ? (
-                <DropdownMenu.Item
-                  className="px-2 py-1.5 text-sm text-muted-foreground"
-                  disabled
-                >
-                  Loading prompts...
-                </DropdownMenu.Item>
-              ) : !promptList || promptList.length === 0 ? (
-                <DropdownMenu.Item
-                  className="px-2 py-1.5 text-sm text-muted-foreground"
-                  disabled
-                >
-                  No prompts available
-                </DropdownMenu.Item>
-              ) : (
-                promptList.map((promptEntry) => (
-                  <DropdownMenu.Item
-                    key={`${promptEntry.server.url}-${promptEntry.prompt.name}`}
-                    className="relative flex cursor-pointer select-none items-start flex-col rounded-sm px-2 py-1.5 text-sm outline-none hover:bg-accent hover:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50"
-                    onSelect={() => {
-                      setSelectedPromptName(promptEntry.prompt.name);
-                    }}
-                  >
-                    <span className="font-medium truncate max-w-full">
-                      {promptEntry.prompt.name}
-                    </span>
-                    {promptEntry.prompt.description && (
-                      <span className="text-xs text-muted-foreground truncate max-w-full">
-                        {promptEntry.prompt.description}
-                      </span>
-                    )}
-                  </DropdownMenu.Item>
-                ))
-              )}
+              <PromptListContent
+                isLoading={isLoading}
+                promptList={promptList}
+                onSelectPrompt={setSelectedPromptName}
+              />
             </DropdownMenu.Content>
           </DropdownMenu.Portal>
         </DropdownMenu.Root>
@@ -150,6 +216,67 @@ export const McpPromptButton = React.forwardRef<
 McpPromptButton.displayName = "McpPromptButton";
 
 /**
+ * Internal component to render prompt list content
+ */
+function PromptListContent({
+  isLoading,
+  promptList,
+  onSelectPrompt,
+}: {
+  isLoading: boolean;
+  promptList:
+    | {
+        server: { url: string };
+        prompt: { name: string; description?: string };
+      }[]
+    | undefined;
+  onSelectPrompt: (name: string) => void;
+}) {
+  if (isLoading) {
+    return (
+      <DropdownMenu.Item
+        className="px-2 py-1.5 text-sm text-muted-foreground"
+        disabled
+      >
+        Loading prompts...
+      </DropdownMenu.Item>
+    );
+  }
+  if (!promptList || promptList.length === 0) {
+    return (
+      <DropdownMenu.Item
+        className="px-2 py-1.5 text-sm text-muted-foreground"
+        disabled
+      >
+        No prompts available
+      </DropdownMenu.Item>
+    );
+  }
+  return (
+    <>
+      {promptList.map((promptEntry) => (
+        <DropdownMenu.Item
+          key={`${promptEntry.server.url}-${promptEntry.prompt.name}`}
+          className="relative flex cursor-pointer select-none items-start flex-col rounded-sm px-2 py-1.5 text-sm outline-none hover:bg-accent hover:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50"
+          onSelect={() => {
+            onSelectPrompt(promptEntry.prompt.name);
+          }}
+        >
+          <span className="font-medium truncate max-w-full">
+            {promptEntry.prompt.name}
+          </span>
+          {promptEntry.prompt.description && (
+            <span className="text-xs text-muted-foreground truncate max-w-full">
+              {promptEntry.prompt.description}
+            </span>
+          )}
+        </DropdownMenu.Item>
+      ))}
+    </>
+  );
+}
+
+/**
  * Props for the ResourceCombobox internal component
  */
 interface ResourceComboboxProps {
@@ -158,7 +285,7 @@ interface ResourceComboboxProps {
   setSearchQuery: (query: string) => void;
   filteredResources: ReturnType<typeof useTamboMcpResourceList>["data"];
   isLoading: boolean;
-  onSelectResource: (uri: string) => void;
+  onSelectResource: (id: string, label: string) => void;
 }
 
 /**
@@ -176,7 +303,7 @@ const ResourceCombobox: React.FC<ResourceComboboxProps> = ({
   return (
     <DropdownMenu.Portal>
       <DropdownMenu.Content
-        className="z-50 w-[400px] max-h-[400px] overflow-hidden rounded-md border border-gray-200 bg-popover text-popover-foreground shadow-md"
+        className="z-50 w-[400px] max-h-[400px] overflow-hidden rounded-md border border-border bg-popover text-popover-foreground shadow-md"
         side="top"
         align="start"
         sideOffset={5}
@@ -209,43 +336,12 @@ const ResourceCombobox: React.FC<ResourceComboboxProps> = ({
 
         {/* Resource list */}
         <div className="overflow-y-auto max-h-[320px] p-1">
-          {isLoading ? (
-            <div className="px-2 py-8 text-center text-sm text-muted-foreground">
-              Loading resources...
-            </div>
-          ) : !filteredResources || filteredResources.length === 0 ? (
-            <div className="px-2 py-8 text-center text-sm text-muted-foreground">
-              {searchQuery
-                ? `No resources matching "${searchQuery}"`
-                : "No resources available"}
-            </div>
-          ) : (
-            filteredResources.map((resourceEntry) => (
-              <DropdownMenu.Item
-                key={`${resourceEntry.server?.url}-${resourceEntry.resource.uri}`}
-                className="relative flex cursor-pointer select-none items-start flex-col rounded-sm px-2 py-2 text-sm outline-none hover:bg-accent hover:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 focus:bg-accent focus:text-accent-foreground"
-                onSelect={() => {
-                  onSelectResource(resourceEntry.resource.uri);
-                }}
-              >
-                <div className="flex items-start justify-between w-full gap-2">
-                  <div className="flex-1 min-w-0">
-                    <div className="font-medium truncate">
-                      {resourceEntry.resource.name ?? "Unnamed Resource"}
-                    </div>
-                    <div className="text-xs text-muted-foreground truncate font-mono">
-                      {resourceEntry.resource.uri}
-                    </div>
-                    {resourceEntry.resource.description && (
-                      <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
-                        {resourceEntry.resource.description}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </DropdownMenu.Item>
-            ))
-          )}
+          <ResourceListContent
+            isLoading={isLoading}
+            filteredResources={filteredResources}
+            searchQuery={searchQuery}
+            onSelectResource={onSelectResource}
+          />
         </div>
       </DropdownMenu.Content>
     </DropdownMenu.Portal>
@@ -253,12 +349,75 @@ const ResourceCombobox: React.FC<ResourceComboboxProps> = ({
 };
 
 /**
+ * Internal component to render resource list content
+ */
+function ResourceListContent({
+  isLoading,
+  filteredResources,
+  searchQuery,
+  onSelectResource,
+}: {
+  isLoading: boolean;
+  filteredResources: ReturnType<typeof useTamboMcpResourceList>["data"];
+  searchQuery: string;
+  onSelectResource: (id: string, label: string) => void;
+}) {
+  if (isLoading) {
+    return (
+      <div className="px-2 py-8 text-center text-sm text-muted-foreground">
+        Loading resources...
+      </div>
+    );
+  }
+  if (!filteredResources || filteredResources.length === 0) {
+    return (
+      <div className="px-2 py-8 text-center text-sm text-muted-foreground">
+        {searchQuery
+          ? `No resources matching "${searchQuery}"`
+          : "No resources available"}
+      </div>
+    );
+  }
+  return (
+    <>
+      {filteredResources.map((resourceEntry) => (
+        <DropdownMenu.Item
+          key={resourceEntry.resource.uri}
+          className="relative flex cursor-pointer select-none items-start flex-col rounded-sm px-2 py-2 text-sm outline-none hover:bg-accent hover:text-accent-foreground data-[disabled]:pointer-events-none data-[disabled]:opacity-50 focus:bg-accent focus:text-accent-foreground"
+          onSelect={() => {
+            onSelectResource(
+              resourceEntry.resource.uri,
+              resourceEntry.resource.name || resourceEntry.resource.uri,
+            );
+          }}
+        >
+          <div className="flex items-start justify-between w-full gap-2">
+            <div className="flex-1 min-w-0">
+              <div className="font-medium truncate">
+                {resourceEntry.resource.name ?? "Unnamed Resource"}
+              </div>
+              <div className="text-xs text-muted-foreground truncate font-mono">
+                {resourceEntry.resource.uri}
+              </div>
+              {resourceEntry.resource.description && (
+                <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
+                  {resourceEntry.resource.description}
+                </div>
+              )}
+            </div>
+          </div>
+        </DropdownMenu.Item>
+      ))}
+    </>
+  );
+}
+
+/**
  * Props for the McpResourceButton component.
  */
-export interface McpResourceButtonProps
-  extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+export interface McpResourceButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   /** Callback to insert text into the input */
-  onInsertText: (text: string) => void;
+  onInsertResource: (id: string, label: string) => void;
   /** Current input value */
   value: string;
   /** Optional custom className */
@@ -280,7 +439,7 @@ export interface McpResourceButtonProps
 export const McpResourceButton = React.forwardRef<
   HTMLButtonElement,
   McpResourceButtonProps
->(({ className, onInsertText, value, ...props }, ref) => {
+>(({ className, onInsertResource, value: _value, ...props }, ref) => {
   const { data: resourceList, isLoading } = useTamboMcpResourceList();
   const [isOpen, setIsOpen] = React.useState(false);
   const [searchQuery, setSearchQuery] = React.useState("");
@@ -305,12 +464,9 @@ export const McpResourceButton = React.forwardRef<
     });
   }, [resourceList, searchQuery]);
 
-  const handleSelectResource = (resourceUri: string) => {
-    // Insert the resource reference with @ syntax
-    const resourceRef = `@${resourceUri}`;
-    // Insert at cursor position or append
-    const newValue = value ? `${value}\n${resourceRef}` : resourceRef;
-    onInsertText(newValue);
+  const handleSelectResource = (id: string, label: string) => {
+    // Pass raw resource string to caller; caller decides how to insert
+    onInsertResource(id, label);
     setIsOpen(false);
     setSearchQuery("");
   };

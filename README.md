@@ -10,129 +10,144 @@ This is a starter template built with **TanStack Router** and **Vite** with Tamb
 
 3. `npx tambo init`
 
-- or rename `example.env.local` to `.env.local` and add your tambo API key you can get for free [here](https://tambo.co/dashboard).
+- or rename `example.env.local` to `.env.local` and add your Tambo API key (get one for free [here](https://tambo.co/dashboard)).
 
 4. Run `npm run dev` and go to `localhost:5173` to use the app!
 
+## Project Structure
+
+```
+src/
+├── routes/              # TanStack Router pages
+│   ├── __root.tsx       # Root layout
+│   ├── index.tsx        # Home page
+│   ├── chat.tsx         # Chat interface with TamboProvider
+│   └── interactables.tsx
+├── components/
+│   ├── tambo/           # Tambo-specific components
+│   │   ├── graph.tsx    # Recharts data visualization
+│   │   ├── message*.tsx # Chat UI components
+│   │   └── thread*.tsx  # Thread management UI
+│   └── ui/
+│       └── card-data.tsx # DataCard component
+├── lib/
+│   ├── tambo.ts         # Central config: component & tool registration
+│   ├── thread-hooks.ts  # Custom thread management hooks
+│   └── utils.ts         # Utility functions
+├── services/
+│   └── population-stats.ts # Demo data service
+└── main.tsx             # App entry point
+```
+
 ## Customizing
 
-### Change what components tambo can control
+### Change what components Tambo can control
 
-You can see how the `Graph` component is registered with tambo in `src/lib/tambo.ts`:
+Components are registered in `src/lib/tambo.ts` with Zod schemas. This template comes with two registered components — `Graph` and `DataCard`:
 
 ```tsx
-const components: TamboComponent[] = [
+export const components: TamboComponent[] = [
   {
     name: "Graph",
     description:
-      "A component that renders various types of charts (bar, line, pie) using Recharts. Supports customizable data visualization with labels, datasets, and styling options.",
+      "A component that renders various types of charts (bar, line, pie) using Recharts...",
     component: Graph,
-    propsSchema: z.object({
-      data: z
-        .object({
-          type: z
-            .enum(["bar", "line", "pie"])
-            .describe("Type of graph to render"),
-          labels: z.array(z.string()).describe("Labels for the graph"),
-          datasets: z
-            .array(
-              z.object({
-                label: z.string().describe("Label for the dataset"),
-                data: z
-                  .array(z.number())
-                  .describe("Data points for the dataset"),
-                color: z
-                  .string()
-                  .optional()
-                  .describe("Optional color for the dataset"),
-              }),
-            )
-            .describe("Data for the graph"),
-        })
-        .describe("Data object containing chart configuration and values"),
-      title: z.string().optional().describe("Optional title for the chart"),
-      showLegend: z
-        .boolean()
-        .optional()
-        .describe("Whether to show the legend (default: true)"),
-      variant: z
-        .enum(["default", "solid", "bordered"])
-        .optional()
-        .describe("Visual style variant of the graph"),
-      size: z
-        .enum(["default", "sm", "lg"])
-        .optional()
-        .describe("Size of the graph"),
-    }),
+    propsSchema: graphSchema,
   },
-  // Add more components for Tambo to control here!
+  {
+    name: "DataCard",
+    description:
+      "A component that displays options as clickable cards with links and summaries...",
+    component: DataCard,
+    propsSchema: dataCardSchema,
+  },
+  // Add more components here
 ];
 ```
 
-You can install this graph component into any project with:
+Each component has:
+- A **name** and **description** so the AI knows when to use it
+- A **component** reference to the React component
+- A **propsSchema** defined with Zod for runtime validation
+
+You can install additional components into any project with:
 
 ```bash
-npx tambo add graph
+npx tambo add <component-name>
 ```
 
-The example Graph component demonstrates several key features:
+Update the `components` array with any component(s) you want Tambo to be able to use in a response.
 
-- Different prop types (strings, arrays, enums, nested objects)
-- Multiple chart types (bar, line, pie)
-- Customizable styling (variants, sizes)
-- Optional configurations (title, legend, colors)
-- Data visualization capabilities
+Find more information about registering components [here](https://tambo.co/docs/concepts/registering-components).
 
-Update the `components` array with any component(s) you want tambo to be able to use in a response!
+### Add tools for Tambo to use
 
-You can find more information about the options [here](https://tambo.co/docs/concepts/registering-components)
-
-### Add tools for tambo to use
+Tools let the AI fetch data or perform actions. This template includes two demo tools — `countryPopulation` and `globalPopulation`:
 
 ```tsx
 export const tools: TamboTool[] = [
   {
-    name: "globalPopulation",
+    name: "countryPopulation",
     description:
-      "A tool to get global population trends with optional year range filtering",
-    tool: getGlobalPopulationTrend,
-    toolSchema: z.function().args(
-      z
-        .object({
-          startYear: z.number().optional(),
-          endYear: z.number().optional(),
-        })
-        .optional(),
+      "A tool to get population statistics by country with advanced filtering options",
+    tool: getCountryPopulations,
+    inputSchema: z.object({
+      continent: z.string().optional(),
+      sortBy: z.enum(["population", "growthRate"]).optional(),
+      limit: z.number().optional(),
+      order: z.enum(["asc", "desc"]).optional(),
+    }),
+    outputSchema: z.array(
+      z.object({
+        countryCode: z.string(),
+        countryName: z.string(),
+        continent: z.enum(["Asia", "Africa", "Europe", "North America", "South America", "Oceania"]),
+        population: z.number(),
+        year: z.number(),
+        growthRate: z.number(),
+      }),
     ),
   },
+  // Add more tools here
 ];
 ```
 
-Find more information about tools [here.](https://tambo.co/docs/concepts/tools)
+Each tool has:
+- A **name** and **description** for the AI
+- A **tool** function that performs the action
+- An **inputSchema** defining expected arguments
+- An **outputSchema** defining the return type
 
-### The Magic of Tambo Requires the TamboProvider
+Find more information about tools [here](https://tambo.co/docs/concepts/tools).
 
-Make sure in the TamboProvider wrapped around your app:
+### The TamboProvider
+
+The `TamboProvider` wraps your app and provides components, tools, and MCP support. In this template, it lives in the chat route (`src/routes/chat.tsx`):
 
 ```tsx
-...
 <TamboProvider
   apiKey={import.meta.env.VITE_TAMBO_API_KEY!}
-  components={components} // Array of components to control
-  tools={tools} // Array of tools it can use
+  userKey={userKey}
+  components={components}
+  tools={tools}
+  tamboUrl={import.meta.env.VITE_TAMBO_URL}
 >
-  {children}
+  <TamboMcpProvider>
+    <div className="h-screen">
+      <MessageThreadFull />
+    </div>
+  </TamboMcpProvider>
 </TamboProvider>
 ```
 
-In this example we do this in the chat route (`src/routes/chat.tsx`), but you can do it anywhere in your app.
+You can place the provider anywhere in your app — just make sure it wraps any components that need access to Tambo.
 
 ### Change where component responses are shown
 
-The components used by tambo are shown alongside the message resopnse from tambo within the chat thread, but you can have the result components show wherever you like by accessing the latest thread message's `renderedComponent` field:
+The components used by Tambo are shown alongside the message response within the chat thread. You can also render them wherever you like by accessing the latest thread message's `renderedComponent` field:
 
 ```tsx
-const { thread } = useTambo();
+const { thread } = useTamboThread();
 const latestComponent =
   thread?.messages[thread.messages.length - 1]?.renderedComponent;
 

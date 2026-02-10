@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
-import { type GenerationStage, useTambo } from "@tambo-ai/react";
+import { useTambo } from "@tambo-ai/react";
+import type { StreamingState } from "@tambo-ai/react";
 import { Loader2Icon } from "lucide-react";
 import * as React from "react";
 
@@ -19,28 +20,17 @@ export function MessageGenerationStage({
   showLabel = true,
   ...props
 }: GenerationStageProps) {
-  const { thread, isIdle } = useTambo();
-  const stage = thread?.generationStage;
+  const { streamingState, isIdle } = useTambo();
+  const status = streamingState.status;
 
-  // Only render if we have a generation stage
-  if (!stage) {
-    return null;
-  }
-
-  // Map stage names to more user-friendly labels
-  const stageLabels: Record<GenerationStage, string> = {
-    IDLE: "Idle",
-    CHOOSING_COMPONENT: "Choosing component",
-    FETCHING_CONTEXT: "Fetching context",
-    HYDRATING_COMPONENT: "Preparing component",
-    STREAMING_RESPONSE: "Generating response",
-    COMPLETE: "Complete",
-    ERROR: "Error",
-    CANCELLED: "Cancelled",
+  // Map status to user-friendly labels
+  const stageLabels: Record<StreamingState["status"], string> = {
+    idle: "Idle",
+    waiting: "Waiting for response",
+    streaming: "Generating response",
   };
 
-  const label =
-    stageLabels[stage] || `${stage.charAt(0).toUpperCase() + stage.slice(1)}`;
+  const label = stageLabels[status] ?? status;
 
   if (isIdle) {
     return null;

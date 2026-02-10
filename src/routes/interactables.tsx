@@ -10,6 +10,7 @@ import {
   ThreadContent,
   ThreadContentMessages,
 } from '@/components/tambo/thread-content';
+import { useAnonymousUserKey } from '@/lib/use-anonymous-user-key';
 import { components, tools } from '@/lib/tambo';
 import { TamboProvider } from '@tambo-ai/react';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
@@ -22,10 +23,13 @@ export const Route = createFileRoute('/interactables')({
 
 function InteractablesPage() {
   const [isChatOpen, setIsChatOpen] = useState(true);
+  const userKey = useAnonymousUserKey();
 
   return (
     <TamboProvider
       apiKey={import.meta.env.VITE_TAMBO_API_KEY!}
+      // For production, use userToken with your auth provider instead. See: https://docs.tambo.co/concepts/user-authentication
+      userKey={userKey}
       components={components}
       tools={tools}
       tamboUrl={import.meta.env.VITE_TAMBO_URL}
@@ -53,7 +57,6 @@ function InteractablesPage() {
 
               <div className="p-4 border-t border-gray-200">
                 <MessageInput
-                  contextKey="interactables-demo"
                   variant="bordered"
                 >
                   <MessageInputTextarea placeholder="Update the settings..." />

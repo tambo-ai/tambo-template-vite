@@ -1,7 +1,7 @@
-import { Tooltip } from "@/components/tambo/suggestions-tooltip";
+import { Tooltip } from "@/components/tambo/message-suggestions";
 import { useTamboThreadInput, useTamboVoice } from "@tambo-ai/react";
 import { Loader2Icon, Mic, Square } from "lucide-react";
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef } from "react";
 
 /**
  * Button for dictating speech into the message input.
@@ -15,12 +15,11 @@ export default function DictationButton() {
     transcript,
     transcriptionError,
   } = useTamboVoice();
-  const { value, setValue } = useTamboThreadInput();
-  const [lastProcessedTranscript, setLastProcessedTranscript] =
-    useState<string>("");
+  const { setValue } = useTamboThreadInput();
+  const lastProcessedTranscriptRef = useRef<string>("");
 
   const handleStartRecording = () => {
-    setLastProcessedTranscript("");
+    lastProcessedTranscriptRef.current = "";
     startRecording();
   };
 
@@ -29,11 +28,11 @@ export default function DictationButton() {
   };
 
   useEffect(() => {
-    if (transcript && transcript !== lastProcessedTranscript) {
-      setLastProcessedTranscript(transcript);
-      setValue(value + " " + transcript);
+    if (transcript && transcript !== lastProcessedTranscriptRef.current) {
+      lastProcessedTranscriptRef.current = transcript;
+      setValue((prev) => prev + " " + transcript);
     }
-  }, [transcript, lastProcessedTranscript, value, setValue]);
+  }, [transcript, setValue]);
 
   if (isTranscribing) {
     return (
@@ -51,7 +50,8 @@ export default function DictationButton() {
           <button
             type="button"
             onClick={handleStopRecording}
-            className="p-2 rounded-md cursor-pointer hover:bg-gray-100"
+            aria-label="Stop dictation"
+            className="p-2 rounded-md cursor-pointer hover:bg-muted"
           >
             <Square className="h-4 w-4 text-red-500 fill-current animate-pulse" />
           </button>
@@ -61,7 +61,8 @@ export default function DictationButton() {
           <button
             type="button"
             onClick={handleStartRecording}
-            className="p-2 rounded-md cursor-pointer hover:bg-gray-100"
+            aria-label="Start dictation"
+            className="p-2 rounded-md cursor-pointer hover:bg-muted"
           >
             <Mic className="h-5 w-5" />
           </button>

@@ -1,19 +1,67 @@
-import { markdownComponents } from "@/components/tambo/markdown-components";
+"use client";
+
+import { markdownComponents } from "./markdown-components";
 import {
   checkHasContent,
   getMessageImages,
   getSafeContent,
 } from "@/lib/thread-hooks";
 import { cn } from "@/lib/utils";
-import type { TamboThreadMessage } from "@tambo-ai/react";
+import type {
+  TamboThreadMessage,
+  TamboToolUseContent,
+  TamboComponentContent,
+  Content,
+} from "@tambo-ai/react";
 import { useTambo } from "@tambo-ai/react";
-import type TamboAI from "@tambo-ai/typescript-sdk";
 import { cva, type VariantProps } from "class-variance-authority";
 import stringify from "json-stringify-pretty-compact";
 import { Check, ChevronDown, ExternalLink, Loader2, X } from "lucide-react";
 import * as React from "react";
 import { useState } from "react";
 import { Streamdown } from "streamdown";
+
+/**
+ * Converts message content to markdown format for rendering with streamdown.
+ * Handles text and resource content parts, converting resources to markdown links
+ * with a custom URL scheme that will be rendered as Mention components.
+ *
+ * @param content - The message content (string, element, array, etc.)
+ * @returns A markdown string ready for streamdown rendering
+ */
+function convertContentToMarkdown(
+  content: TamboThreadMessage["content"] | React.ReactNode | undefined | null,
+): string {
+  if (!content) return "";
+  if (typeof content === "string") return content;
+  if (React.isValidElement(content)) {
+    // For React elements, we can't convert to markdown - this shouldn't happen
+    // in normal flow, but keep backward compatibility
+    return "";
+  }
+  if (Array.isArray(content)) {
+    const parts: string[] = [];
+    for (const item of content) {
+      if (item?.type === "text") {
+        parts.push(item.text ?? "");
+      } else if (item?.type === "resource") {
+        const resource = item.resource;
+        const uri = resource?.uri;
+        if (uri) {
+          // Use resource name for display, fallback to URI if no name
+          const displayName = resource?.name ?? uri;
+          // Use a custom protocol that looks more standard to avoid blocking
+          // Format: tambo-resource://<encoded-uri>
+          // We'll detect this in the link component and decode the URI
+          const encodedUri = encodeURIComponent(uri);
+          parts.push(`[${displayName}](tambo-resource://${encodedUri})`);
+        }
+      }
+    }
+    return parts.join(" ");
+  }
+  return "";
+}
 
 /**
  * CSS variants for the message container
@@ -45,12 +93,14 @@ const messageVariants = cva("flex", {
  * @property {VariantProps<typeof messageVariants>["variant"]} [variant] - Optional styling variant for the message container.
  * @property {TamboThreadMessage} message - The full Tambo thread message object.
  * @property {boolean} [isLoading] - Optional flag to indicate if the message is in a loading state.
+ * @property {boolean} [lastRunCancelled] - Whether the last run was cancelled (from TamboThread).
  */
 interface MessageContextValue {
   role: "user" | "assistant";
   variant?: VariantProps<typeof messageVariants>["variant"];
   message: TamboThreadMessage;
   isLoading?: boolean;
+  lastRunCancelled?: boolean;
 }
 
 /**
@@ -75,15 +125,31 @@ const useMessageContext = () => {
 };
 
 /**
- * Get the tool call request from the message, or the component tool call request
+ * Extract tool_use content blocks from a message.
  *
- * @param message - The message to get the tool call request from
- * @returns The tool call request
+ * @param message - The message to extract tool use blocks from
+ * @returns Array of TamboToolUseContent blocks
  */
-export function getToolCallRequest(
+export function getToolUseBlocks(
   message: TamboThreadMessage,
-): TamboAI.ToolCallRequest | undefined {
-  return message.toolCallRequest ?? message.component?.toolCallRequest;
+): TamboToolUseContent[] {
+  return message.content.filter(
+    (c): c is TamboToolUseContent => c.type === "tool_use",
+  );
+}
+
+/**
+ * Extract component content blocks from a message.
+ *
+ * @param message - The message to extract component blocks from
+ * @returns Array of TamboComponentContent blocks
+ */
+export function getComponentBlocks(
+  message: TamboThreadMessage,
+): TamboComponentContent[] {
+  return message.content.filter(
+    (c): c is TamboComponentContent => c.type === "component",
+  );
 }
 
 // --- Sub-Components ---
@@ -92,8 +158,10 @@ export function getToolCallRequest(
  * Props for the Message component.
  * Extends standard HTMLDivElement attributes.
  */
-export interface MessageProps
-  extends Omit<React.HTMLAttributes<HTMLDivElement>, "content"> {
+export interface MessageProps extends Omit<
+  React.HTMLAttributes<HTMLDivElement>,
+  "content"
+> {
   /** The role of the message sender ('user' or 'assistant'). */
   role: "user" | "assistant";
   /** The full Tambo thread message object. */
@@ -123,15 +191,13 @@ const Message = React.forwardRef<HTMLDivElement, MessageProps>(
     { children, className, role, variant, isLoading, message, ...props },
     ref,
   ) => {
-    const contextValue = React.useMemo(
-      () => ({ role, variant, isLoading, message }),
-      [role, variant, isLoading, message],
-    );
+    const { thread } = useTambo();
+    const lastRunCancelled = thread?.thread.lastRunCancelled ?? false;
 
-    // Don't render tool response messages as they're shown in tool call dropdowns
-    if (message.role === "tool") {
-      return null;
-    }
+    const contextValue = React.useMemo(
+      () => ({ role, variant, isLoading, message, lastRunCancelled }),
+      [role, variant, isLoading, message, lastRunCancelled],
+    );
 
     return (
       <MessageContext.Provider value={contextValue}>
@@ -176,6 +242,32 @@ const LoadingIndicator: React.FC<React.HTMLAttributes<HTMLDivElement>> = ({
 LoadingIndicator.displayName = "LoadingIndicator";
 
 /**
+ * Internal component to render message content based on its type
+ */
+function MessageContentRenderer({
+  contentToRender,
+  markdownContent,
+  markdown,
+}: {
+  contentToRender: unknown;
+  markdownContent: string;
+  markdown: boolean;
+}) {
+  if (!contentToRender) {
+    return <span className="text-muted-foreground italic">Empty message</span>;
+  }
+  if (React.isValidElement(contentToRender)) {
+    return contentToRender;
+  }
+  if (markdown) {
+    return (
+      <Streamdown components={markdownComponents}>{markdownContent}</Streamdown>
+    );
+  }
+  return markdownContent;
+}
+
+/**
  * Props for the MessageImages component.
  */
 export type MessageImagesProps = React.HTMLAttributes<HTMLDivElement>;
@@ -210,6 +302,8 @@ const MessageImages = React.forwardRef<HTMLDivElement, MessageImagesProps>(
               alt={`Image ${index + 1}`}
               width={128}
               height={128}
+              loading="lazy"
+              decoding="async"
               className="w-full h-full object-cover"
             />
           </div>
@@ -224,10 +318,12 @@ MessageImages.displayName = "MessageImages";
  * Props for the MessageContent component.
  * Extends standard HTMLDivElement attributes.
  */
-export interface MessageContentProps
-  extends Omit<React.HTMLAttributes<HTMLDivElement>, "content"> {
+export interface MessageContentProps extends Omit<
+  React.HTMLAttributes<HTMLDivElement>,
+  "content"
+> {
   /** Optional override for the message content. If not provided, uses the content from the message object in the context. */
-  content?: string | { type: string; text?: string }[];
+  content?: string | TamboThreadMessage["content"];
   /** Optional flag to render as Markdown. Default is true. */
   markdown?: boolean;
 }
@@ -242,15 +338,15 @@ const MessageContent = React.forwardRef<HTMLDivElement, MessageContentProps>(
     { className, children, content: contentProp, markdown = true, ...props },
     ref,
   ) => {
-    const { message, isLoading } = useMessageContext();
+    const { message, isLoading, lastRunCancelled } = useMessageContext();
     const contentToRender = children ?? contentProp ?? message.content;
 
-    const safeContent = React.useMemo(
-      () => getSafeContent(contentToRender as TamboThreadMessage["content"]),
-      [contentToRender],
-    );
+    const markdownContent = React.useMemo(() => {
+      const result = convertContentToMarkdown(contentToRender);
+      return result;
+    }, [contentToRender]);
     const hasContent = React.useMemo(
-      () => checkHasContent(contentToRender as TamboThreadMessage["content"]),
+      () => checkHasContent(contentToRender),
       [contentToRender],
     );
 
@@ -278,20 +374,12 @@ const MessageContent = React.forwardRef<HTMLDivElement, MessageContentProps>(
             className={cn("break-words", !markdown && "whitespace-pre-wrap")}
             data-slot="message-content-text"
           >
-            {!contentToRender ? (
-              <span className="text-muted-foreground italic">
-                Empty message
-              </span>
-            ) : React.isValidElement(contentToRender) ? (
-              contentToRender
-            ) : markdown ? (
-              <Streamdown components={markdownComponents}>
-                {typeof safeContent === "string" ? safeContent : ""}
-              </Streamdown>
-            ) : (
-              safeContent
-            )}
-            {message.isCancelled && (
+            <MessageContentRenderer
+              contentToRender={contentToRender}
+              markdownContent={markdownContent}
+              markdown={markdown}
+            />
+            {lastRunCancelled && (
               <span className="text-muted-foreground text-xs">cancelled</span>
             )}
           </div>
@@ -306,8 +394,10 @@ MessageContent.displayName = "MessageContent";
  * Props for the ToolcallInfo component.
  * Extends standard HTMLDivElement attributes.
  */
-export interface ToolcallInfoProps
-  extends Omit<React.HTMLAttributes<HTMLDivElement>, "content"> {
+export interface ToolcallInfoProps extends Omit<
+  React.HTMLAttributes<HTMLDivElement>,
+  "content"
+> {
   /** Optional flag to render response content as Markdown. Default is true. */
   markdown?: boolean;
 }
@@ -316,17 +406,32 @@ function getToolStatusMessage(
   message: TamboThreadMessage,
   isLoading: boolean | undefined,
 ) {
-  if (message.role !== "assistant" || !getToolCallRequest(message)) {
-    return null;
-  }
+  if (message.role !== "assistant") return null;
+  const toolUseBlocks = getToolUseBlocks(message);
+  if (toolUseBlocks.length === 0) return null;
+  const toolUse = toolUseBlocks[0];
+  return toolUse.statusMessage ?? (isLoading ? `Calling ${toolUse.name}` : `Called ${toolUse.name}`);
+}
 
-  const toolCallMessage = isLoading
-    ? `Calling ${getToolCallRequest(message)?.toolName ?? "tool"}`
-    : `Called ${getToolCallRequest(message)?.toolName ?? "tool"}`;
-  const toolStatusMessage = isLoading
-    ? message.component?.statusMessage
-    : message.component?.completionStatusMessage;
-  return toolStatusMessage ?? toolCallMessage;
+/**
+ * Internal component to render tool call status icon
+ */
+function ToolcallStatusIcon({
+  hasToolError,
+  isLoading,
+}: {
+  hasToolError: boolean | undefined;
+  isLoading: boolean | undefined;
+}) {
+  if (hasToolError) {
+    return <X className="w-3 h-3 text-bold text-red-500" />;
+  }
+  if (isLoading) {
+    return (
+      <Loader2 className="w-3 h-3 text-muted-foreground text-bold animate-spin" />
+    );
+  }
+  return <Check className="w-3 h-3 text-bold text-green-500" />;
 }
 
 /**
@@ -341,34 +446,51 @@ const ToolcallInfo = React.forwardRef<HTMLDivElement, ToolcallInfoProps>(
     const { thread } = useTambo();
     const toolDetailsId = React.useId();
 
-    const associatedToolResponse = React.useMemo(() => {
-      if (!thread?.messages) return null;
-      const currentMessageIndex = thread.messages.findIndex(
+    const toolUse = getToolUseBlocks(message)[0];
+
+    // Find the associated tool result: look for a tool_result content block in subsequent messages
+    // that matches the tool_use id, or check for tool_result blocks within this message's content.
+    const associatedToolResult = React.useMemo(() => {
+      if (!toolUse) return null;
+
+      // First check for tool_result blocks in the same message
+      const inlineResult = message.content.find(
+        (c): c is Extract<Content, { type: "tool_result" }> =>
+          c.type === "tool_result" && c.toolUseId === toolUse.id,
+      );
+      if (inlineResult) return inlineResult;
+
+      // Then look in subsequent messages for tool_result content blocks
+      const messages = thread?.thread.messages;
+      if (!messages) return null;
+      const currentMessageIndex = messages.findIndex(
         (m: TamboThreadMessage) => m.id === message.id,
       );
       if (currentMessageIndex === -1) return null;
-      for (let i = currentMessageIndex + 1; i < thread.messages.length; i++) {
-        const nextMessage = thread.messages[i];
-        if (nextMessage.role === "tool") {
-          return nextMessage;
+      for (let i = currentMessageIndex + 1; i < messages.length; i++) {
+        const nextMessage = messages[i];
+        // Look for tool_result blocks in this message's content
+        for (const block of nextMessage.content) {
+          if (
+            block.type === "tool_result" &&
+            block.toolUseId === toolUse.id
+          ) {
+            return block as Extract<Content, { type: "tool_result" }>;
+          }
         }
-        if (
-          nextMessage.role === "assistant" &&
-          getToolCallRequest(nextMessage)
-        ) {
+        // If this is another assistant message with tool_use, stop searching
+        if (nextMessage.role === "assistant" && getToolUseBlocks(nextMessage).length > 0) {
           break;
         }
       }
       return null;
-    }, [message, thread?.messages]);
+    }, [message, toolUse, thread?.thread.messages]);
 
-    if (message.role !== "assistant" || !getToolCallRequest(message)) {
+    if (message.role !== "assistant" || !toolUse) {
       return null;
     }
 
-    const toolCallRequest: TamboAI.ToolCallRequest | undefined =
-      getToolCallRequest(message);
-    const hasToolError = message.error;
+    const hasToolError = !!associatedToolResult?.isError;
 
     const toolStatusMessage = getToolStatusMessage(message, isLoading);
 
@@ -389,16 +511,13 @@ const ToolcallInfo = React.forwardRef<HTMLDivElement, ToolcallInfoProps>(
             aria-controls={toolDetailsId}
             onClick={() => setIsExpanded(!isExpanded)}
             className={cn(
-              "flex items-center gap-1 cursor-pointer hover:bg-gray-100 rounded-md p-1 select-none w-fit",
+              "flex items-center gap-1 cursor-pointer hover:bg-muted rounded-md p-1 select-none w-fit",
             )}
           >
-            {hasToolError ? (
-              <X className="w-3 h-3 text-bold text-red-500" />
-            ) : isLoading ? (
-              <Loader2 className="w-3 h-3 text-muted-foreground text-bold animate-spin" />
-            ) : (
-              <Check className="w-3 h-3 text-bold text-green-500" />
-            )}
+            <ToolcallStatusIcon
+              hasToolError={hasToolError}
+              isLoading={isLoading}
+            />
             <span>{toolStatusMessage}</span>
             <ChevronDown
               className={cn(
@@ -415,23 +534,26 @@ const ToolcallInfo = React.forwardRef<HTMLDivElement, ToolcallInfoProps>(
             )}
           >
             <span className="whitespace-pre-wrap pl-2">
-              tool: {toolCallRequest?.toolName}
+              tool: {toolUse.name}
             </span>
             <span className="whitespace-pre-wrap pl-2">
               parameters:{"\n"}
-              {stringify(keyifyParameters(toolCallRequest?.parameters))}
+              {stringify(toolUse.input)}
             </span>
-            <SamplingSubThread parentMessageId={message.id} />
-            {associatedToolResponse && (
+            {associatedToolResult && (
               <div className="pl-2">
                 <span className="whitespace-pre-wrap">result:</span>
                 <div>
-                  {!associatedToolResponse.content ? (
+                  {!associatedToolResult.content ||
+                  associatedToolResult.content.length === 0 ? (
                     <span className="text-muted-foreground italic">
                       Empty response
                     </span>
                   ) : (
-                    formatToolResult(associatedToolResponse.content, markdown)
+                    formatToolResult(
+                      associatedToolResult.content as Content[],
+                      markdown,
+                    )
                   )}
                 </div>
               </div>
@@ -444,82 +566,6 @@ const ToolcallInfo = React.forwardRef<HTMLDivElement, ToolcallInfoProps>(
 );
 
 ToolcallInfo.displayName = "ToolcallInfo";
-
-/**
- * Displays a message's child messages in a collapsible dropdown.
- * Used for MCP sampling sub-threads.
- * @component SamplingSubThread
- */
-const SamplingSubThread = ({
-  parentMessageId,
-  titleText = "finished additional work",
-}: {
-  parentMessageId: string;
-  titleText?: string;
-}) => {
-  const { thread } = useTambo();
-  const [isExpanded, setIsExpanded] = useState(false);
-  const samplingDetailsId = React.useId();
-
-  const childMessages = React.useMemo(() => {
-    return thread?.messages?.filter(
-      (m: TamboThreadMessage) => m.parentMessageId === parentMessageId,
-    );
-  }, [thread?.messages, parentMessageId]);
-
-  if (!childMessages?.length) return null;
-
-  return (
-    <div className="flex flex-col gap-1">
-      <button
-        type="button"
-        aria-expanded={isExpanded}
-        aria-controls={samplingDetailsId}
-        onClick={() => setIsExpanded(!isExpanded)}
-        className={cn(
-          "flex items-center gap-1 cursor-pointer hover:bg-muted-foreground/10 rounded-md p-2 select-none w-fit",
-        )}
-      >
-        <span>{titleText}</span>
-        <ChevronDown
-          className={cn(
-            "w-3 h-3 transition-transform duration-200",
-            !isExpanded && "-rotate-90",
-          )}
-        />
-      </button>
-      <div
-        id={samplingDetailsId}
-        className={cn(
-          "transition-[max-height,opacity] duration-300",
-          isExpanded
-            ? "max-h-96 opacity-100 overflow-auto"
-            : "max-h-0 opacity-0 overflow-hidden",
-        )}
-        aria-hidden={!isExpanded}
-      >
-        <div className="pl-2">
-          <div className="border-l-2 border-muted-foreground p-2 flex flex-col gap-4">
-            {childMessages?.map((m: TamboThreadMessage) => (
-              <div key={m.id} className={`${m.role === "user" && "pl-2"}`}>
-                <span
-                  className={cn(
-                    "whitespace-pre-wrap",
-                    m.role === "assistant" &&
-                      "bg-muted/50 rounded-md p-2 inline-block w-fit",
-                  )}
-                >
-                  {getSafeContent(m.content)}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-};
-SamplingSubThread.displayName = "SamplingSubThread";
 
 /**
  * Props for the ReasoningInfo component.
@@ -598,14 +644,11 @@ const ReasoningInfo = React.forwardRef<HTMLDivElement, ReasoningInfoProps>(
             )}
           >
             <span className={isLoading ? "animate-thinking-gradient" : ""}>
-              {isLoading
-                ? "Thinking "
-                : message.reasoningDurationMS
-                  ? formatReasoningDuration(message.reasoningDurationMS) + " "
-                  : "Done Thinking "}
-              {message.reasoning.length > 1
-                ? `(${message.reasoning.length} steps)`
-                : ""}
+              <ReasoningStatusText
+                isLoading={isLoading}
+                reasoningDurationMS={message.reasoningDurationMS}
+                reasoningSteps={message.reasoning.length}
+              />
             </span>
             <ChevronDown
               className={cn(
@@ -649,10 +692,32 @@ const ReasoningInfo = React.forwardRef<HTMLDivElement, ReasoningInfoProps>(
 
 ReasoningInfo.displayName = "ReasoningInfo";
 
-function keyifyParameters(parameters: TamboAI.ToolCallParameter[] | undefined) {
-  if (!parameters) return;
-  return Object.fromEntries(
-    parameters.map((p) => [p.parameterName, p.parameterValue]),
+/**
+ * Internal component to render reasoning status text
+ */
+function ReasoningStatusText({
+  isLoading,
+  reasoningDurationMS,
+  reasoningSteps,
+}: {
+  isLoading: boolean | undefined;
+  reasoningDurationMS?: number;
+  reasoningSteps: number;
+}) {
+  let statusText: string;
+  if (isLoading) {
+    statusText = "Thinking ";
+  } else if (reasoningDurationMS) {
+    statusText = formatReasoningDuration(reasoningDurationMS) + " ";
+  } else {
+    statusText = "Done Thinking ";
+  }
+
+  return (
+    <>
+      {statusText}
+      {reasoningSteps > 1 ? `(${reasoningSteps} steps)` : ""}
+    </>
   );
 }
 
@@ -675,8 +740,75 @@ function formatReasoningDuration(durationMS: number) {
 }
 
 /**
- * Helper function to detect if content is JSON and format it nicely
+ * Renders a resource content part from a tool result.
+ * Handles text, blob (images), and URI resources.
+ * @param resource - The resource object
+ * @param index - Index for unique key generation
+ * @returns Resource element
+ */
+function renderResourceContent(
+  resource: {
+    uri?: string;
+    text?: string;
+    blob?: string;
+    name?: string;
+    mimeType?: string;
+  },
+  index: number,
+): React.ReactNode {
+  // Handle blob content (e.g., base64-encoded images)
+  if (resource.blob && resource.mimeType?.startsWith("image/")) {
+    const dataUrl = `data:${resource.mimeType};base64,${resource.blob}`;
+    return (
+      <div
+        key={`resource-blob-${index}`}
+        className="rounded-md overflow-hidden shadow-sm max-w-xs"
+      >
+        <img
+          src={dataUrl}
+          alt={resource.name ?? `Resource image ${index + 1}`}
+          loading="lazy"
+          decoding="async"
+          className="max-w-full h-auto object-contain"
+        />
+      </div>
+    );
+  }
+
+  // Handle text content
+  if (resource.text) {
+    return (
+      <div key={`resource-text-${index}`} className="whitespace-pre-wrap">
+        {resource.name && (
+          <span className="font-medium text-muted-foreground">
+            {resource.name}:{" "}
+          </span>
+        )}
+        {resource.text}
+      </div>
+    );
+  }
+
+  // Handle URI reference
+  if (resource.uri) {
+    return (
+      <div key={`resource-uri-${index}`} className="flex items-center gap-1">
+        <span className="font-medium text-muted-foreground">
+          {resource.name ?? "Resource"}:
+        </span>
+        <span className="font-mono text-xs truncate">{resource.uri}</span>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+/**
+ * Helper function to detect if content is JSON and format it nicely.
+ * Handles text and resource content types from V1 content blocks.
  * @param content - The content to check and format
+ * @param enableMarkdown - Whether to render text as markdown
  * @returns Formatted content or original content if not JSON
  */
 function formatToolResult(
@@ -685,47 +817,85 @@ function formatToolResult(
 ): React.ReactNode {
   if (!content) return content;
 
-  // First check if content can be converted to a string for JSON parsing
-  let contentString: string | null = null;
+  // Handle string content directly
   if (typeof content === "string") {
-    contentString = content;
-  } else if (Array.isArray(content)) {
-    contentString = content
-      .map((item) => {
-        if (item?.type === "text") {
-          return item.text ?? "";
+    return formatTextContent(content, enableMarkdown);
+  }
+
+  // Handle array content with mixed types
+  if (Array.isArray(content)) {
+    const textParts: string[] = [];
+    const nonTextParts: React.ReactNode[] = [];
+
+    content.forEach((item, index) => {
+      if (!item?.type) return;
+
+      if (item.type === "text" && item.text) {
+        textParts.push(item.text);
+      } else if (item.type === "resource" && item.resource) {
+        const resourceNode = renderResourceContent(item.resource, index);
+        if (resourceNode) {
+          nonTextParts.push(resourceNode);
         }
-        return "";
-      })
-      .join("");
-  }
+      }
+    });
 
-  // Try to parse as JSON if we have a string
-  if (contentString) {
-    try {
-      const parsed = JSON.parse(contentString);
-      return (
-        <pre
-          className={cn(
-            "bg-muted/50 rounded-md p-3 text-xs overflow-x-auto overflow-y-auto max-w-full max-h-64",
-          )}
-        >
-          <code className="font-mono break-words whitespace-pre-wrap">
-            {JSON.stringify(parsed, null, 2)}
-          </code>
-        </pre>
-      );
-    } catch {
-      // JSON parsing failed, render as markdown or plain text
-      if (!enableMarkdown) return contentString;
-      return (
-        <Streamdown components={markdownComponents}>{contentString}</Streamdown>
-      );
+    // Combine text parts and render
+    const combinedText = textParts.join("");
+    const textNode = combinedText
+      ? formatTextContent(combinedText, enableMarkdown)
+      : null;
+
+    // If we only have text, return it directly
+    if (nonTextParts.length === 0) {
+      return textNode;
     }
+
+    // If we have mixed content, render in a flex container
+    return (
+      <div className="flex flex-col gap-2">
+        {textNode}
+        {nonTextParts.length > 0 && (
+          <div className="flex flex-wrap gap-2">{nonTextParts}</div>
+        )}
+      </div>
+    );
   }
 
-  // If content is not a string or array, use getSafeContent as fallback
+  // Fallback for unknown content types
   return getSafeContent(content);
+}
+
+/**
+ * Formats text content, attempting JSON parsing for pretty-printing.
+ * @param text - The text to format
+ * @param enableMarkdown - Whether to render as markdown if not JSON
+ * @returns Formatted text node
+ */
+function formatTextContent(
+  text: string,
+  enableMarkdown: boolean,
+): React.ReactNode {
+  if (!text) return null;
+
+  try {
+    const parsed = JSON.parse(text);
+    return (
+      <pre
+        className={cn(
+          "bg-muted/50 rounded-md p-3 text-xs overflow-x-auto overflow-y-auto max-w-full max-h-64",
+        )}
+      >
+        <code className="font-mono break-words whitespace-pre-wrap">
+          {JSON.stringify(parsed, null, 2)}
+        </code>
+      </pre>
+    );
+  } catch {
+    // JSON parsing failed, render as markdown or plain text
+    if (!enableMarkdown) return text;
+    return <Streamdown components={markdownComponents}>{text}</Streamdown>;
+  }
 }
 
 /**
@@ -738,14 +908,14 @@ export type MessageRenderedComponentAreaProps =
 /**
  * Displays the `renderedComponent` associated with an assistant message.
  * Shows a button to view in canvas if a canvas space exists, otherwise renders inline.
- * Only renders if the message role is 'assistant' and `message.renderedComponent` exists.
+ * Only renders if the message role is 'assistant' and a component content block has a renderedComponent.
  * @component Message.RenderedComponentArea
  */
 const MessageRenderedComponentArea = React.forwardRef<
   HTMLDivElement,
   MessageRenderedComponentAreaProps
 >(({ className, children, ...props }, ref) => {
-  const { message, role } = useMessageContext();
+  const { message, role, lastRunCancelled } = useMessageContext();
   const [canvasExists, setCanvasExists] = React.useState(false);
 
   // Check if canvas exists on mount and window resize
@@ -767,10 +937,16 @@ const MessageRenderedComponentArea = React.forwardRef<
     };
   }, []);
 
+  // Get rendered component from component content blocks
+  const renderedComponent = React.useMemo(() => {
+    const componentBlocks = getComponentBlocks(message);
+    return componentBlocks.find((c) => c.renderedComponent)?.renderedComponent ?? null;
+  }, [message]);
+
   if (
-    !message.renderedComponent ||
+    !renderedComponent ||
     role !== "assistant" ||
-    message.isCancelled
+    lastRunCancelled
   ) {
     return null;
   }
@@ -792,7 +968,7 @@ const MessageRenderedComponentArea = React.forwardRef<
                     new CustomEvent("tambo:showComponent", {
                       detail: {
                         messageId: message.id,
-                        component: message.renderedComponent,
+                        component: renderedComponent,
                       },
                     }),
                   );
@@ -806,7 +982,7 @@ const MessageRenderedComponentArea = React.forwardRef<
             </button>
           </div>
         ) : (
-          <div className="w-full pt-2 px-2">{message.renderedComponent}</div>
+          <div className="w-full pt-2 px-2">{renderedComponent}</div>
         ))}
     </div>
   );

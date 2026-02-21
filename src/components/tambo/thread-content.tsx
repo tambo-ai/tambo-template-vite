@@ -124,9 +124,17 @@ const ThreadContentMessages = React.forwardRef<
 >(({ className, ...props }, ref) => {
   const { messages, isGenerating, variant } = useThreadContentContext();
 
-  const filteredMessages = messages.filter(
-    (message) => message.role !== "system",
-  );
+  const filteredMessages = messages.filter((message) => {
+    if (message.role === "system") return false;
+    // Hide user messages that only contain tool results (auto-generated after tool calls)
+    if (message.role === "user") {
+      const hasText = message.content?.some(
+        (block) => block.type === "text" && block.text?.trim(),
+      );
+      if (!hasText) return false;
+    }
+    return true;
+  });
 
   return (
     <div

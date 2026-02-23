@@ -5,7 +5,6 @@ import {
   MessageInput,
   MessageInputError,
   MessageInputFileButton,
-  MessageInputMcpConfigButton,
   MessageInputMcpPromptButton,
   MessageInputMcpResourceButton,
   MessageInputSubmitButton,
@@ -119,7 +118,7 @@ export const MessageThreadFull = React.forwardRef<
               <MessageInputMcpPromptButton />
               <MessageInputMcpResourceButton />
               {/* Uncomment this to enable client-side MCP config modal button */}
-              <MessageInputMcpConfigButton />
+              {/* <MessageInputMcpConfigButton /> */}
               <MessageInputSubmitButton />
             </MessageInputToolbar>
             <MessageInputError />

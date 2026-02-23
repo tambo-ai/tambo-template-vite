@@ -1,6 +1,6 @@
 "use client";
 
-import { createMarkdownComponents } from "@/components/tambo/markdown-components";
+import { createMarkdownComponents } from "@/components/tambo/message";
 import { cn } from "@/lib/utils";
 import {
   DropdownMenu,

@@ -38,7 +38,7 @@ export const ScrollableMessageContainer = React.forwardRef<
 
   // Create a dependency that represents all content that should trigger autoscroll
   const messagesContent = useMemo(() => {
-    if (!messages) return null;
+    if (!messages.length) return null;
 
     return messages.map((message) => ({
       id: message.id,

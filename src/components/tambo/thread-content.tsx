@@ -18,6 +18,7 @@ import * as React from "react";
  * @typedef ThreadContentContextValue
  * @property {Array} messages - Array of message objects in the thread
  * @property {boolean} isGenerating - Whether a response is being generated
+ * @property {string|undefined} generationStage - Current generation stage
  * @property {VariantProps<typeof messageVariants>["variant"]} [variant] - Optional styling variant for messages
  */
 interface ThreadContentContextValue {
@@ -78,7 +79,7 @@ const ThreadContent = React.forwardRef<HTMLDivElement, ThreadContentProps>(
 
     const contextValue = React.useMemo(
       () => ({
-        messages: messages ?? [],
+        messages,
         isGenerating,
         variant,
       }),
@@ -124,9 +125,19 @@ const ThreadContentMessages = React.forwardRef<
 >(({ className, ...props }, ref) => {
   const { messages, isGenerating, variant } = useThreadContentContext();
 
-  const filteredMessages = messages.filter(
-    (message) => message.role !== "system",
-  );
+  const filteredMessages = messages.filter((message) => {
+    if (message.role === "system") return false;
+    // Hide messages that only contain tool_result content blocks.
+    // These are consumed by ToolcallInfo on the preceding tool_use message
+    // and shouldn't render as standalone message bubbles.
+    if (
+      message.content.length > 0 &&
+      message.content.every((block) => block.type === "tool_result")
+    ) {
+      return false;
+    }
+    return true;
+  });
 
   return (
     <div

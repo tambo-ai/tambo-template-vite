@@ -42,7 +42,7 @@
     "react-dom": "^19.1.1",
     "react-markdown": "^10.1.0",
     "recharts": "^3.5.0",
-    "streamdown": "^1.6.7",
+    "streamdown": "^2.4.0",
     "use-debounce": "^10.1.0"
   },
   "devDependencies": {
